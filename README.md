@@ -59,14 +59,22 @@ Platform| Android and Android TV
 Media platform| DhakaFlix (Local Dhaka Media Server)
 Mobile package ID| "com.maibgoat.dhakaflix"
 
-👤 Publisher
+👥 Credits & Attribution
+
+Main Development Credit
+
+Claude (Anthropic)
+
+Recognized for its primary contribution to the development process of DhakaFlix.
+
+Publisher
 
 MAiB_GOAT
 
 Official publisher of DhakaFlix.
 
-"GitHub Profile" (https://github.com/MAiB06)
+GitHub: https://github.com/MAiB06
 
 ---
 
-© DhakaFlix | Published by MAiB_GOAT
+DhakaFlix © | Published by MAiB_GOAT
