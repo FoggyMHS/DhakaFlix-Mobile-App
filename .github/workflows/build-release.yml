@@ -7,24 +7,55 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: dhakaflix-build
+  cancel-in-progress: true
+
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Check source ZIP
+        run: |
+          if [ ! -f "DhakaFlix-Mobile-Source.zip" ]; then
+            echo "ERROR: DhakaFlix-Mobile-Source.zip was not found in the repository root."
+            exit 1
+          fi
 
       - name: Extract Android project
         run: |
           mkdir -p source
           unzip -q DhakaFlix-Mobile-Source.zip -d source
 
-          cp -a source/app .
-          cp -a source/gradle .
-          cp source/settings.gradle.kts .
-          cp source/build.gradle.kts .
-          cp source/gradle.properties .
+          PROJECT_DIR="$(find source -type f \( \
+            -path '*/app/build.gradle' -o \
+            -path '*/app/build.gradle.kts' \
+          \) -print -quit | sed -E 's#/app/build\.gradle(\.kts)?$##')"
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Could not find the Android project inside the ZIP."
+            echo "The ZIP must contain an app folder with its Gradle build file."
+            exit 1
+          fi
+
+          echo "Android project found at: $PROJECT_DIR"
+          cp -a "$PROJECT_DIR"/. .
+
+          if [ ! -d "app" ]; then
+            echo "ERROR: App module was not copied."
+            exit 1
+          fi
+
+          if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
+            echo "ERROR: settings.gradle or settings.gradle.kts is missing."
+            exit 1
+          fi
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -41,13 +72,44 @@ jobs:
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      - name: Set up Gradle
+      - name: Set up Gradle fallback
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
 
+      - name: Prepare Gradle
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            echo "Using the project's Gradle wrapper."
+          else
+            echo "Gradle wrapper not found. Using installed Gradle 8.11.1."
+          fi
+
       - name: Build APK
-        run: gradle --no-daemon assembleDebug
+        run: |
+          if [ -f "./gradlew" ]; then
+            GRADLE="./gradlew"
+          else
+            GRADLE="gradle"
+          fi
+
+          for attempt in 1 2 3; do
+            echo "Build attempt $attempt of 3"
+
+            if $GRADLE --no-daemon --refresh-dependencies assembleDebug; then
+              echo "APK build successful."
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              echo "Build failed. Retrying in 20 seconds..."
+              sleep 20
+            fi
+          done
+
+          echo "ERROR: Build failed after 3 attempts."
+          exit 1
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -55,4 +117,4 @@ jobs:
           name: DhakaFlix-Android
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          
+          retention-days: 30
