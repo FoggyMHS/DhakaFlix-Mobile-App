@@ -2,14 +2,26 @@
 name: Build DhakaFlix
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish this build as a GitHub Release?
+        required: true
+        type: choice
+        options:
+          - "no"
+          - "yes"
+        default: "no"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: dhakaflix-build
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -24,7 +36,7 @@ jobs:
       - name: Check source ZIP
         run: |
           if [ ! -f "DhakaFlix-Mobile-Source.zip" ]; then
-            echo "ERROR: DhakaFlix-Mobile-Source.zip was not found in the repository root."
+            echo "ERROR: DhakaFlix-Mobile-Source.zip was not found."
             exit 1
           fi
 
@@ -39,8 +51,7 @@ jobs:
           \) -print -quit | sed -E 's#/app/build\.gradle(\.kts)?$##')"
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Could not find the Android project inside the ZIP."
-            echo "The ZIP must contain an app folder with its Gradle build file."
+            echo "ERROR: Android project not found inside ZIP."
             exit 1
           fi
 
@@ -48,12 +59,12 @@ jobs:
           cp -a "$PROJECT_DIR"/. .
 
           if [ ! -d "app" ]; then
-            echo "ERROR: App module was not copied."
+            echo "ERROR: App module missing."
             exit 1
           fi
 
           if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
-            echo "ERROR: settings.gradle or settings.gradle.kts is missing."
+            echo "ERROR: Gradle settings file missing."
             exit 1
           fi
 
@@ -81,9 +92,9 @@ jobs:
         run: |
           if [ -f "./gradlew" ]; then
             chmod +x ./gradlew
-            echo "Using the project's Gradle wrapper."
+            echo "Using project Gradle wrapper."
           else
-            echo "Gradle wrapper not found. Using installed Gradle 8.11.1."
+            echo "Using installed Gradle 8.11.1."
           fi
 
       - name: Build APK
@@ -103,7 +114,7 @@ jobs:
             fi
 
             if [ "$attempt" -lt 3 ]; then
-              echo "Build failed. Retrying in 20 seconds..."
+              echo "Retrying in 20 seconds..."
               sleep 20
             fi
           done
@@ -111,10 +122,38 @@ jobs:
           echo "ERROR: Build failed after 3 attempts."
           exit 1
 
-      - name: Upload APK
+      - name: Prepare APK
+        run: |
+          mkdir -p release-apk
+          cp app/build/outputs/apk/debug/app-debug.apk \
+            release-apk/DhakaFlix.apk
+
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: DhakaFlix-Android
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: release-apk/DhakaFlix.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Generate release tag
+        if: github.event_name == 'push' || inputs.publish_release == 'yes'
+        id: release
+        run: |
+          VERSION="v$(date -u +'%Y.%m.%d')-${GITHUB_RUN_NUMBER}"
+          echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'push' || inputs.publish_release == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            release-apk/DhakaFlix.apk \
+            --title "DhakaFlix $RELEASE_TAG" \
+            --notes "Automated DhakaFlix Android APK build.
+
+          Commit: $GITHUB_SHA
+          Build: #$GITHUB_RUN_NUMBER"
