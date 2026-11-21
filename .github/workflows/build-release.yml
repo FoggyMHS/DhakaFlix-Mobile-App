@@ -1,159 +1,87 @@
 
-name: Build DhakaFlix
+name: Build DhakaFlix Mobile
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       publish_release:
         description: Publish this build as a GitHub Release?
         required: true
         type: choice
+        default: "no"
         options:
           - "no"
           - "yes"
-        default: "no"
 
 permissions:
   contents: write
 
-concurrency:
-  group: dhakaflix-build
-  cancel-in-progress: false
-
 jobs:
   build:
-    name: Build Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check source ZIP
-        run: |
-          if [ ! -f "DhakaFlix-Mobile-Source.zip" ]; then
-            echo "ERROR: DhakaFlix-Mobile-Source.zip was not found."
-            exit 1
-          fi
-
-      - name: Extract Android project
-        run: |
-          mkdir -p source
-          unzip -q DhakaFlix-Mobile-Source.zip -d source
-
-          PROJECT_DIR="$(find source -type f \( \
-            -path '*/app/build.gradle' -o \
-            -path '*/app/build.gradle.kts' \
-          \) -print -quit | sed -E 's#/app/build\.gradle(\.kts)?$##')"
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Android project not found inside ZIP."
-            exit 1
-          fi
-
-          echo "Android project found at: $PROJECT_DIR"
-          cp -a "$PROJECT_DIR"/. .
-
-          if [ ! -d "app" ]; then
-            echo "ERROR: App module missing."
-            exit 1
-          fi
-
-          if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
-            echo "ERROR: Gradle settings file missing."
-            exit 1
-          fi
-
-      - name: Set up Java
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK
-        run: |
-          sdkmanager --install \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-      - name: Set up Gradle fallback
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.11.1'
+          gradle-version: "8.11.1"
 
-      - name: Prepare Gradle
+      - name: Extract mobile source ZIP
         run: |
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            echo "Using project Gradle wrapper."
-          else
-            echo "Using installed Gradle 8.11.1."
+          mkdir -p "$RUNNER_TEMP/mobile"
+          unzip -q DhakaFlix-Mobile-Source.zip -d "$RUNNER_TEMP/mobile"
+
+          PROJECT_DIR=$(find "$RUNNER_TEMP/mobile" \
+            -name settings.gradle -o -name settings.gradle.kts \
+            | head -n 1 | xargs dirname)
+
+          if [ -z "$PROJECT_DIR" ] || [ ! -d "$PROJECT_DIR" ]; then
+            echo "Mobile Gradle project not found in source ZIP."
+            exit 1
           fi
 
-      - name: Build APK
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Build mobile APK
         run: |
-          if [ -f "./gradlew" ]; then
-            GRADLE="./gradlew"
+          cd "$PROJECT_DIR"
+
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            ./gradlew assembleDebug
           else
-            GRADLE="gradle"
+            gradle assembleDebug
           fi
 
-          for attempt in 1 2 3; do
-            echo "Build attempt $attempt of 3"
-
-            if $GRADLE --no-daemon --refresh-dependencies assembleDebug; then
-              echo "APK build successful."
-              exit 0
-            fi
-
-            if [ "$attempt" -lt 3 ]; then
-              echo "Retrying in 20 seconds..."
-              sleep 20
-            fi
-          done
-
-          echo "ERROR: Build failed after 3 attempts."
-          exit 1
-
-      - name: Prepare APK
-        run: |
-          mkdir -p release-apk
+          mkdir -p "$RUNNER_TEMP/output"
           cp app/build/outputs/apk/debug/app-debug.apk \
-            release-apk/DhakaFlix.apk
+            "$RUNNER_TEMP/output/DhakaFlix-Mobile.apk"
 
-      - name: Upload APK Artifact
+      - name: Upload mobile APK
         uses: actions/upload-artifact@v4
         with:
-          name: DhakaFlix-Android
-          path: release-apk/DhakaFlix.apk
+          name: DhakaFlix-Mobile-Android
+          path: ${{ runner.temp }}/output/DhakaFlix-Mobile.apk
           if-no-files-found: error
           retention-days: 30
 
-      - name: Generate release tag
-        if: github.event_name == 'push' || inputs.publish_release == 'yes'
-        id: release
-        run: |
-          VERSION="v$(date -u +'%Y.%m.%d')-${GITHUB_RUN_NUMBER}"
-          echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Publish GitHub Release
-        if: github.event_name == 'push' || inputs.publish_release == 'yes'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
-        run: |
-          gh release create "$RELEASE_TAG" \
-            release-apk/DhakaFlix.apk \
-            --title "DhakaFlix $RELEASE_TAG" \
-            --notes "Automated DhakaFlix Android APK build.
-
-          Commit: $GITHUB_SHA
-          Build: #$GITHUB_RUN_NUMBER"
+      - name: Create GitHub Release
+        if: inputs.publish_release == 'yes'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mobile-v${{ github.run_number }}
+          name: DhakaFlix Mobile Build ${{ github.run_number }}
+          generate_release_notes: true
+          files: ${{ runner.temp }}/output/DhakaFlix-Mobile.apk
