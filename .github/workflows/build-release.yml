@@ -18,7 +18,7 @@ jobs:
       - name: Extract Android project
         run: |
           mkdir -p source
-          unzip -q DhakaFlix-Mobile-GitHub-Upload.zip -d source
+          unzip -q DhakaFlix-Mobile-Source.zip -d source
 
           cp -a source/app .
           cp -a source/gradle .
